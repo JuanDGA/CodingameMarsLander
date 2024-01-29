@@ -1,435 +1,173 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <time.h>
-#include <math.h>
 
-#define min(a, b) ((a < b) ? a : b)
-#define max(a, b) ((a > b) ? a : b)
-#define toRadians(a) (((float) a) * (M_PI / 180.0))
-#define distace(a1, a2, b1, b2) sqrtf((a1 * a1) + (a2 * a2))
-float position(float initialPosition, float initialSpeed, float acceleration) {
-    return initialPosition + initialSpeed + (0.5 * acceleration);
-}
-float finalSpeed(float initialSpeed, float acceleration, float distance) {
-    float value = sqrtf((initialSpeed * initialSpeed) + (2 * acceleration * distance));
-    if (distance > 0) return value;
-    if (distance < 0) return -value;
-    return value;
-}
-
-const int SURFACE_WIDTH = 7000;
-const int SURFACE_HEIGHT = 3000;
-const int CLOCKS_PER_MS = CLOCKS_PER_SEC / 1000;
-
-const int POPULATION_SIZE = 60;
-const int CHROMOSOME_SIZE = 15;
-const int SELECTION_SIZE = 10;
-const int ELITISM_SIZE = 2;
-const float MUTATION_RATE = 0.1;
-
-const float gravity = -3.711;
-
-double sinCos[362];
-
-// Surface related structs and functions
+const int MAP_SIZE = 21000000;
+const int WIDTH = 7000;
+const int HEIGHT = 3000;
 
 typedef struct {
-    unsigned short x;
-    unsigned short y;
-} Point;
+  int x;
+  int y;
+} Coordinate;
+
+bool is_valid_coordinate(int x, int y) {
+  return x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT;
+}
 
 typedef struct {
-    unsigned char * map;
-    int width;
-    int height;
-    Point lastPoint;
-    Point landingPointA;
-    Point landingPointB;
-    Point landingPoint;
-} MarsSurface;
+  bool * ground; // 7000 * 3000
+  Coordinate landing[2];
+} Surface;
 
-MarsSurface * createSurface(int width, int height) {
-    MarsSurface * marsSurface = (MarsSurface * ) calloc(1, sizeof(MarsSurface));
-
-    marsSurface->map = calloc(SURFACE_WIDTH * SURFACE_HEIGHT, sizeof(char));
-    marsSurface->width = width;
-    marsSurface->height = height;
-
-    return marsSurface;
+Surface * create_surface() {
+  Surface * surface = (Surface *) malloc(sizeof(Surface));
+  surface->ground = (bool *) calloc(sizeof(bool), MAP_SIZE);
+  surface->landing[0].x = 0;
+  surface->landing[0].y = 0;
+  surface->landing[1].x = 0;
+  surface->landing[1].y = 0;
+  return surface;
 }
 
-void fillLine(MarsSurface * surface, int x, const int * vector, Point * lastPointPerX, unsigned char * pointsPerX) {
-    for (int pointX = min(surface->lastPoint.x, x); pointX < max(surface->lastPoint.x, x); pointX++) {
-        float exactPointY = (float)surface->lastPoint.y + (((float)pointX - (float)surface->lastPoint.x) / (float)vector[0]) * (float)vector[1];
-        int pointY = (int) roundf(exactPointY);
+void push(int * stack, int * top, int x, int y) {
+  stack[++(*top)] = x;
+  stack[++(*top)] = y;
+}
 
-        surface->map[pointX + pointY * surface->width] = 1;
+bool pop(const int * stack, int * top, int * x, int * y) {
+  if (*top < 0) return false;
+  *y = stack[(*top)--];
+  *x = stack[(*top)--];
+  return true;
+}
 
-        Point lastPoint = lastPointPerX[pointX];
+void draw_line(Surface * surface, Coordinate from, Coordinate to) {
+  int dx = to.x - from.x;
+  int dy = to.y - from.y;
+  int steps = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
 
-        unsigned char amount = pointsPerX[pointX];
+  float xIncrement = (float) dx / (float) steps;
+  float yIncrement = (float) dy / (float) steps;
 
-        lastPointPerX[pointX] = (Point) {pointX, pointY};
+  float x = (float) from.x;
+  float y = (float) from.y;
 
-        if (amount % 2 == 0) {
-            for (int j = min(pointY, lastPoint.y); j < max(pointY, lastPoint.y); j++) {
-                surface->map[pointX + j * surface->width] = 1;
-            }
-        } else if (pointY < lastPoint.y && surface->map[pointX + pointY * surface->width] == 1) {
-            for (int j = 0; j < pointY - 1; j++) {
-                surface->map[pointX + j * surface->width] = 0;
-            }
-            lastPointPerX[pointX] = (Point) {pointX, 0};
-        }
+  for (int i = 0; i <= steps; i++) {
+    int index = ((int) y * WIDTH) + (int) x;
+    surface->ground[index] = true;
+    x += xIncrement;
+    y += yIncrement;
+  }
+}
 
-        pointsPerX[pointX]++;
+void add_point(Surface * surface, Coordinate * coordinates, int current_position) {
+  Coordinate next_point = coordinates[current_position];
+  int index = next_point.y * WIDTH + next_point.x;
+  surface->ground[index] = true;
+  if (current_position > 0) {
+    Coordinate last_point = coordinates[current_position - 1];
+    if (last_point.y == next_point.y) {
+      surface->landing[0].x = last_point.x;
+      surface->landing[0].y = last_point.y;
+      surface->landing[1].x = next_point.x;
+      surface->landing[1].y = next_point.y;
     }
+    draw_line(surface, last_point, next_point);
+  }
 }
 
-void addPoint(MarsSurface * surface, int x, int y, Point * lastPointPerX, unsigned char * pointsPerX) {
-    int * vector = (int *) calloc(2, sizeof(short));
-    vector[0] = x - surface->lastPoint.x;
-    vector[1] = y - surface->lastPoint.y;
+void flood_fill_scanline(Surface * surface, Coordinate from) {
+  int x1;
 
-    if (vector[1] == 0 && abs(vector[0]) >= (SURFACE_WIDTH / 7)) {
-        surface->landingPointA = surface->lastPoint;
-        surface->landingPointB = (Point) {x, y};
-        surface->landingPoint = (Point) {(x + surface->lastPoint.x) / 2, y};
+  int x = from.x;
+  int y = from.y;
+
+  int spanAbove, spanBelow;
+  int * stack = malloc(42000000 * sizeof(int));
+
+  int top = -1;
+
+  push(stack, &top, x, y);
+
+  while (pop(stack, &top, &x, &y)) {
+    x1 = x;
+    while (x1 >= 0 && is_valid_coordinate(x1, y) && !surface->ground[y * WIDTH + x1]) x1--;
+    x1++;
+    spanAbove = spanBelow = 0;
+
+    while (x1 < WIDTH && !surface->ground[y * WIDTH + x1]) {
+      surface->ground[y * WIDTH + x1] = true;
+      if(!spanAbove && y > 0 && !surface->ground[(y - 1) * WIDTH + x1]) {
+        push(stack, &top, x1, y - 1);
+        spanAbove = 1;
+      }
+      else if(spanAbove && y > 0 && surface->ground[(y - 1) * WIDTH + x1]) spanAbove = 0;
+      if(!spanBelow && y < HEIGHT - 1 && !surface->ground[(y + 1) * WIDTH + x1]) {
+        push(stack, &top, x1, y + 1);
+        spanBelow = 1;
+      }
+      else if(spanBelow && y < HEIGHT - 1 && surface->ground[(y + 1) * WIDTH + x1]) spanBelow = 0;
+      x1++;
     }
+  }
 
-    if (vector[0] != 0) fillLine(surface, x, vector, lastPointPerX, pointsPerX);
-
-    surface->lastPoint.x = x;
-    surface->lastPoint.y = y;
-
-    free(vector);
+  free(stack);
 }
 
-void printSurface(MarsSurface * surface) {
-    printf("Printing...\n");
-    for (int y = 0; y < SURFACE_HEIGHT; y++) {
-        for (int x = 0; x < SURFACE_WIDTH; x++) {
-            int index = x + ((SURFACE_HEIGHT - y - 1) * SURFACE_WIDTH);
-            printf("%d", surface->map[index]);
-        }
-        printf("\n");
-    }
+void fill_surface(Surface * surface) {
+  flood_fill_scanline(surface, (Coordinate) { (surface->landing[0].x + surface->landing[1].x) / 2, surface->landing[1].y - 5});
 }
 
-// Genetic algorithm related structs and functions
-
-typedef struct {
-    float xPos, yPos, xSpeed, ySpeed, fuel, angle, thrust;
-} Ship;
-
-typedef struct {
-    int rotation;
-    int thrustChange;
-} Action;
-
-typedef struct {
-    Action * actions;
-    float fitness;
-} Chromosome;
-
-typedef struct {
-    Chromosome * chromosomes;
-} Population;
-
-void printShip(Ship * ship) {
-    fprintf(stderr, "Ship: {X=%.2f Y=%.2f HSpeed=%.2f VSpeed=%.2f Fuel=%.2f Angle=%.2f Thrust=%.2f}\n",
-            ship->xPos, ship->yPos, ship->xSpeed, ship->ySpeed, ship->fuel, ship->angle, ship->thrust);
-}
-
-Ship advanceShip(const Ship * ship, Action action) {
-    Ship nextShip = * ship;
-
-    float xAcceleration = nextShip.thrust * sinCos[90 + ((int) nextShip.angle)];
-    float yAcceleration = nextShip.thrust * sinCos[182 + 90 + ((int) nextShip.angle)] + gravity;
-
-    float newXPosition = position(nextShip.xPos, nextShip.xSpeed, xAcceleration);
-    float newYPosition = position(nextShip.yPos, nextShip.ySpeed, yAcceleration);
-
-    float newXSpeed = finalSpeed(nextShip.xSpeed, xAcceleration, newXPosition - nextShip.xPos);
-    float newYSpeed = finalSpeed(nextShip.ySpeed, yAcceleration, newYPosition - nextShip.yPos);
-
-    nextShip.xPos = roundf(newXPosition);
-    nextShip.yPos = roundf(newYPosition);
-    nextShip.xSpeed = roundf(newXSpeed);
-    nextShip.ySpeed = roundf(newYSpeed);
-    nextShip.fuel -= nextShip.thrust;
-    nextShip.angle += action.rotation;
-    nextShip.thrust += action.thrustChange;
-    nextShip.angle = fmin(90.0f, fmax(-90.0f, nextShip.angle));
-    nextShip.thrust = fmin(4.0f, fmax(0.0f, nextShip.thrust));
-
-    return nextShip;
-}
-
-float distance(Point p1, Point p2) {
-    float dx = (float)(p2.x - p1.x);
-    float dy = (float)(p2.y - p1.y);
-    return sqrtf((dx * dx) + (dy * dy));
-}
-
-float getAngle(float a, float b, float c) {
-    float cosA = ((b * b) + (c * c) - (a * a)) / (2.0 * b * c);
-    float angle = acosf(cosA);
-    angle = angle * 180.0 / M_PI;
-    return angle;
-}
-
-float calculateFitness(MarsSurface * surface, Ship * ship) {
-    Point shipPoint = (Point) {(int) ship->xPos, (int) ship->yPos};
-    float distanceToBase = distance(shipPoint, surface->landingPoint);
-    float b = distance(shipPoint, (Point) {surface->landingPoint.x, 0});
-    float c = surface->landingPoint.y;
-
-    int minLandingX = min(surface->landingPointA.x, surface->landingPointB.x);
-    int maxLandingX = max(surface->landingPointA.x, surface->landingPointB.x);
-
-    float relativeAngle = fabsf(getAngle(distanceToBase, b, c));
-
-    int isLost = ship->xPos >= SURFACE_WIDTH || ship->xPos < 0 || ship->yPos >= SURFACE_HEIGHT;
-
-    int position;
-
-    if (isLost) {
-        position = 0;
-    } else {
-        position = surface->map[((int) ship->xPos) + ((int) ship->yPos) * surface->width];
-    }
-
-    int isLandingZone = ship->xPos >= minLandingX &&
-            ship->xPos <= maxLandingX &&
-            ship->yPos >= surface->landingPoint.y - 20 &&
-            ship->yPos <= surface->landingPoint.y;
-
-    int isCrash = ((int) ship->angle) != 0 || abs((int) ship->xSpeed) > 20 || abs((int) ship->ySpeed) > 40;
-
-    int isLandingCrash = isLandingZone && isCrash && position == 1;
-
-    int isCommonCrash = isLandingZone != 1 && position == 1;
-
-    int isFlying = position == 0;
-
-    int isLanding = isLandingZone && isCrash == 0 && position == 1;
-
-    // TODO: Implement Better Fitness calculation
-
-    // CASES:
-    // Landing crash -> 80K - speed - angle
-    // Common crash -> 30k - distance - relative_angle * intersections
-    // Lost -> 30K - distance - relative_angle * intersections
-    // Flying -> 50k - distance - relative_angle * intersections - speed - angle
-    // Landing -> 100K + Fuel
-
-    float fitness = 0.0;
-
-    if (isLandingCrash) {
-        fitness = 80000 - (abs((int) ship->xSpeed) * 200) - (abs((int) ship->ySpeed) * 100) - (abs((int) ship->angle) * 1000);
-    } else if (isCommonCrash || isLost) {
-        fitness = - distanceToBase * 10 - relativeAngle * 5;
-    } else if (isFlying) {
-        fitness = 50000 - distanceToBase - relativeAngle * 5 - (abs((int) ship->xSpeed) * 200) - (abs((int) ship->ySpeed) * 100);
-    } else if (isLanding) {
-        fitness = 100000 + ship->fuel * 10;
-    }
-
-    return fitness;
-
-//    return 100000.0 + 2 * ship->fuel -
-//        max(0.0, abs((int) ship->xSpeed) - 45) * 200 -
-//        max(0.0, abs((int) ship->ySpeed) - 25) * 200 -
-//        abs((int) ship->angle) * 1000 -
-//        a * 5 - fabsf(getAngle(a, b, c)) * 10;
-}
-
-int compareChromosomes(const void * a, const void * b) {
-    Chromosome * chromosomeA = (Chromosome *) a;
-    Chromosome * chromosomeB = (Chromosome *) b;
-
-    return chromosomeB->fitness - chromosomeA->fitness;
-}
-
-Action generateRandomAction() {
-    int rotation = (rand() % 31) - 15;
-    int thrust = (rand() % 3) - 1;
-
-    return (Action) {rotation, thrust};
-}
-
-void initializeChromosome(MarsSurface * surface, Chromosome * chromosome, Ship * ship) {
-    chromosome->actions = (Action *) malloc(CHROMOSOME_SIZE * sizeof(Action));
-
-    Ship currentShip = * ship;
-    int finished = 0;
-    for (int j = 0; j < CHROMOSOME_SIZE; j++) {
-        Action action = generateRandomAction();
-        chromosome->actions[j] = action;
-
-        if (currentShip.xPos < 0 || currentShip.xPos >= SURFACE_WIDTH || currentShip.yPos >= SURFACE_HEIGHT) finished = 1;
-        else if (surface->map[((int) currentShip.xPos) + ((int) currentShip.yPos) * SURFACE_WIDTH]) finished = 1;
-
-        if (finished == 0) {
-            currentShip = advanceShip(&currentShip, action);
-        }
-    }
-    chromosome->fitness = calculateFitness(surface, &currentShip);
-}
-
-void initializePopulation(MarsSurface * surface, Population * population, Ship * ship) {
-    for (int i = 0; i < POPULATION_SIZE; i++) {
-        initializeChromosome(surface, &population->chromosomes[i], ship);
-    }
-}
-
-Population * selectPopulation(Population * basePopulation, Population * selection, Population * tournament) {
-    for (int i = 0; i < ELITISM_SIZE; i++) {
-        selection->chromosomes[i] = basePopulation->chromosomes[i];
-    }
-
-    for (int i = ELITISM_SIZE; i < SELECTION_SIZE; i++) {
-        for (int j = 0; j < 5; j++) {
-            int idx = rand() % POPULATION_SIZE;
-            tournament->chromosomes[j] = basePopulation->chromosomes[idx];
-        }
-        qsort(tournament->chromosomes, 5, sizeof(Chromosome), compareChromosomes);
-        selection->chromosomes[i] = tournament->chromosomes[0];
-    }
-    return selection;
-}
-
-void crossoverSelection(MarsSurface * surface, Population * population, Population * selection, Ship * ship) {
-    for (int i = 0; i < POPULATION_SIZE; i++) {
-        int selectedA = rand() % 2;
-        int selectedB = rand() % 2;
-
-        int splitIdx = rand() % CHROMOSOME_SIZE;
-
-        Ship currentShip = *ship;
-        int finished = 0;
-        for (int j = 0; j < CHROMOSOME_SIZE; j++) {
-            Action selectedAction;
-
-            if (j < splitIdx) {
-                selectedAction = selection->chromosomes[selectedA].actions[j];
-            } else {
-                selectedAction = selection->chromosomes[selectedB].actions[j];
-            }
-
-            if ((((float) rand()) / RAND_MAX) < MUTATION_RATE) {
-                selectedAction.thrustChange += ((rand() % 3) - 1);
-                selectedAction.thrustChange = min(1, max(-1, selectedAction.thrustChange));
-                selectedAction.rotation += ((rand() % 31) - 15);
-                selectedAction.rotation = min(15, max(-15, selectedAction.rotation));
-            }
-
-            if (finished == 0) {
-                currentShip = advanceShip(&currentShip, selectedAction);
-                if (currentShip.xPos < 0 || currentShip.xPos >= SURFACE_WIDTH || currentShip.yPos >= SURFACE_HEIGHT) finished = 1;
-                else if (surface->map[((int) currentShip.xPos) + ((int) currentShip.yPos) * SURFACE_WIDTH]) finished = 1;
-            }
-
-            population->chromosomes[i].actions[j] = selectedAction;
-        }
-        population->chromosomes[i].fitness = calculateFitness(surface, &currentShip);
-    }
-}
-
-void initializeTrignometricValues() {
-    for (int i = -90; i <= 90; i++) {
-        int sinPos = i + 90;
-        int cosPos = i + 90 + 181;
-
-        float inRadians = toRadians(i);
-
-        sinCos[sinPos] = sinf(inRadians);
-        sinCos[sinPos] = cosf(inRadians);
-    }
-}
 
 int main() {
-    srand(time(NULL));
-    initializeTrignometricValues();
+  Surface * surface = create_surface();
+  fprintf(stderr, "Done");
+  int surface_n;
+  scanf("%d", &surface_n);
 
-    MarsSurface * marsSurface = createSurface(SURFACE_WIDTH, SURFACE_HEIGHT);
+  Coordinate coordinates[surface_n];
 
-    Point * lastPointPerX = calloc(SURFACE_WIDTH, sizeof(Point));
+  for (int i = 0; i < surface_n; i++) {
+    int land_x, land_y;
+    scanf("%d%d", &land_x, &land_y);
+    Coordinate coordinate = (Coordinate) {land_x, land_y};
+    coordinates[i] = coordinate;
+    add_point(surface, coordinates, i);
+  }
 
-    unsigned char * pointsPerX = calloc(SURFACE_WIDTH, sizeof(char));
+  clock_t start_time, end_time;
+  start_time = clock();
+  fill_surface(surface);
+  end_time = clock();
 
-    Ship * state = (Ship *) malloc(sizeof(Ship));
-    float xPos, yPos, hSpeed, vSpeed, remainingFuel, angle, thrust;
+  fprintf(stderr, "Filled surface in %f ms\n", ((double)(end_time - start_time) / CLOCKS_PER_SEC) * 1000.0);
 
-    Population * population = (Population *) malloc(sizeof(Population));
-    population->chromosomes = malloc(POPULATION_SIZE * sizeof(Chromosome));
 
-    Population * selection = (Population *) malloc(sizeof(Population));
-    selection->chromosomes = malloc(SELECTION_SIZE * sizeof(Chromosome));
+  // game loop
+  while (1) {
+    int X;
+    int Y;
+    // the horizontal speed (in m/s), can be negative.
+    int h_speed;
+    // the vertical speed (in m/s), can be negative.
+    int v_speed;
+    // the quantity of remaining fuel in liters.
+    int fuel;
+    // the rotation angle in degrees (-90 to 90).
+    int rotate;
+    // the thrust power (0 to 4).
+    int power;
+    scanf("%d%d%d%d%d%d%d", &X, &Y, &h_speed, &v_speed, &fuel, &rotate, &power);
 
-    Population * tournament = (Population *) malloc(sizeof(Population));
-    tournament->chromosomes = malloc(5 * sizeof(Chromosome));
+    // Write an action using printf(). DON'T FORGET THE TRAILING \n
+    // To debug: fprintf(stderr, "Debug messages...\n");
 
-    Action action;
 
-    int vertices, x, y;
-    scanf("%d", &vertices);
-    clock_t startTime = clock();
-    for (int i = 0; i < vertices; i++) {
-        scanf("%d%d", &x, &y);
-//        fprintf(stderr, "addPoint(marsSurface, %d, %d, lastPointPerX, pointsPerX);\n", x / 100, y / 100);
-        addPoint(marsSurface, x, y, lastPointPerX, pointsPerX);
-    }
+    // rotate power. rotate is the desired rotation angle. power is the desired thrust power.
+    printf("-20 3\n");
+  }
 
-    free(lastPointPerX);
-    free(pointsPerX);
-
-    fprintf(stderr, "Landing Point: %d_%d\n", marsSurface->landingPoint.x, marsSurface->landingPoint.y);
-
-//    printSurface(marsSurface);
-    double maxDuration = 0.0900 * CLOCKS_PER_SEC;
-    short turn = 0;
-    while (1) {
-        turn += 1;
-
-        if (turn != 1) {
-            startTime = clock();
-            maxDuration = 0.090 * CLOCKS_PER_SEC;
-        }
-
-        scanf("%f%f%f%f%f%f%f",
-              &state->xPos, &state->yPos, &state->xSpeed, &state->ySpeed, &state->fuel, &state->angle, &state->thrust
-        );
-        printShip(state);
-
-        fprintf(stderr, "Took: %ldms\n", (clock() - startTime) / 1000);
-
-        if (turn == 1) initializePopulation(marsSurface, population, state);
-
-        fprintf(stderr, "After initialization: %ldms\n", (clock() - startTime) / 1000);
-
-        int iterations = 0;
-
-        while ((clock() - startTime) < maxDuration) {
-            qsort(population->chromosomes, POPULATION_SIZE, sizeof(Chromosome), compareChromosomes);
-            crossoverSelection(marsSurface, population, selectPopulation(population, selection, tournament), state);
-            iterations++;
-        }
-        qsort(population->chromosomes, POPULATION_SIZE, sizeof(Chromosome), compareChromosomes);
-
-        fprintf(stderr, "Finished iterations after: %ldms\n", (clock() - startTime) / 1000);
-        fprintf(stderr, "Generations: %d\n", iterations);
-
-        action = population->chromosomes->actions[0];
-
-        Ship result = advanceShip(state, action);
-        printShip(&result);
-        float resultFitness = calculateFitness(marsSurface, &result);
-        fprintf(stderr, "Fitness: %f\n", resultFitness);
-
-        printf("%d %d\n", (int) result.angle, (int) result.thrust);
-    }
-
-    return 1;
+  return 0;
 }

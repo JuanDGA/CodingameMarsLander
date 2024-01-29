@@ -49,8 +49,8 @@
 	"kind" : "codemodel",
 	"paths" : 
 	{
-		"build" : "D:/projects/codingame/marsLander/cmake-build-debug",
-		"source" : "D:/projects/codingame/marsLander"
+		"build" : "C:/Users/david/Documents/projects/CodingameMarsLander/cmake-build-debug",
+		"source" : "C:/Users/david/Documents/projects/CodingameMarsLander"
 	},
 	"version" : 
 	{

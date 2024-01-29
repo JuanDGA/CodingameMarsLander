@@ -1,0 +1,3 @@
+C:\Users\david\AppData\Local\Programs\CLion\bin\cmake\win\x64\bin\cmake.exe -E rm -f CMakeFiles\marsLander.dir/objects.a
+C:\Users\david\AppData\Local\Programs\CLion\bin\mingw\bin\ar.exe qc CMakeFiles\marsLander.dir/objects.a @CMakeFiles\marsLander.dir\objects1.rsp
+C:\Users\david\AppData\Local\Programs\CLion\bin\mingw\bin\gcc.exe -g -Wl,--whole-archive CMakeFiles\marsLander.dir/objects.a -Wl,--no-whole-archive -o marsLander.exe -Wl,--out-implib,libmarsLander.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\marsLander.dir\linkLibs.rsp
