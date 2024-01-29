@@ -1,0 +1,3 @@
+D:/projects/codingame/marsLander/cmake-build-debug/CMakeFiles/marsLander.dir
+D:/projects/codingame/marsLander/cmake-build-debug/CMakeFiles/edit_cache.dir
+D:/projects/codingame/marsLander/cmake-build-debug/CMakeFiles/rebuild_cache.dir
