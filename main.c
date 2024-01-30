@@ -12,7 +12,7 @@ const int WIDTH = 7000;
 const int HEIGHT = 3000;
 
 const int POPULATION_SIZE = 40;
-const int CHROMOSOME_SIZE = 10;
+const int ACTION_DURATION = 5;
 const int ELITISM = 4;
 
 double get_rand() {
@@ -67,18 +67,15 @@ Surface * create_surface() {
 typedef struct {
   int thrust;
   int angle;
+  double fitness;
 } Action;
 
 Action zero_action() {
-  return (Action) {0, 0};
+  return (Action) {0, 0, -1.0};
 }
 
 typedef struct {
-  Action actions[10];
-} Chromosome;
-
-typedef struct {
-  Chromosome chromosomes[40];
+  Action * actions;
 } Population;
 
 typedef struct {
@@ -92,13 +89,27 @@ Lander initialize_lander() {
   return (Lander) {zero_coordinate(), zero_vector(), 0, zero_action()};
 }
 
-Coordinate advance(Lander lander) {
+Lander advance(Lander lander, Action action) {
   float xAcc = ((float) lander.action.thrust) * sinf((float) lander.action.angle);
   float yAcc = ((float) lander.action.thrust) * cosf((float) lander.action.angle) - 3.711f;
 
   int nextX = (int) roundf((float) lander.coordinate.x + (float) lander.speed.x + (0.5f * xAcc));
   int nextY = (int) roundf((float) lander.coordinate.y + (float) lander.speed.y + (0.5f * yAcc));
-  return (Coordinate) {nextX, nextY};
+
+  Coordinate next_coordinate = (Coordinate) {nextX, nextY};
+  Vector2D next_speed = (Vector2D) {lander.speed.x + (int) roundf(xAcc), lander.speed.y + (int) roundf(yAcc)};
+  Action next_action = (Action) { lander.action.thrust + action.thrust, lander.action.angle + action.angle, -1.0 };
+  next_action.thrust = max(0, min(4, next_action.thrust));
+  next_action.angle = max(-90, min(90, next_action.angle));
+
+  Lander result = (Lander) {
+    next_coordinate,
+    next_speed,
+    lander.fuel - lander.action.thrust,
+    next_action
+  };
+
+  return result;
 }
 
 void push(int * stack, int * top, int x, int y) {
@@ -190,30 +201,87 @@ void fill_surface(Surface * surface) {
   flood_fill_scanline(surface, (Coordinate) { (surface->landing[0].x + surface->landing[1].x) / 2, surface->landing[1].y - 5});
 }
 
-Population initialize_population(Population population, bool is_empty) {
-  Population new_population;
+bool is_crash(Coordinate coordinate, Surface * surface) {
+  int index = coordinate.y * WIDTH + coordinate.x;
+  return surface->ground[index];
+}
 
-  int current_size = 0;
-  if (!is_empty) {
-    new_population = population;
-    current_size = ELITISM;
+bool is_lost(Coordinate coordinate) {
+  return coordinate.x < 0 || coordinate.x >= WIDTH || coordinate.y < 0 || coordinate.y >= HEIGHT;
+}
+
+bool is_game_over(Coordinate coordinate, Surface * surface) {
+  return is_lost(coordinate) || is_crash(coordinate, surface);
+}
+
+double evaluate_action(Action action, Lander lander, Surface * surface) {
+  Lander evaluatedLander = lander;
+
+  int duration = 0;
+  double score = -10.0;
+  while (duration < ACTION_DURATION || is_game_over(evaluatedLander.coordinate, surface)) {
+    score += 10;
+    evaluatedLander = advance(evaluatedLander, action);
+    duration += 1;
+    if (is_game_over(lander.coordinate, surface)) break;
   }
 
-  for (int i = current_size; i < POPULATION_SIZE; i++) {
-    Chromosome chromosome = new_population.chromosomes[i];
-    for (int j = 0; j < CHROMOSOME_SIZE; j++) {
-      chromosome.actions[j] = (Action) { get_random(-1, 1), get_random(-15, 15) };
+//  if (grid.collidesAt(state.coordinates)) {
+//                    score = if (grid.isLandingZone(state.coordinates)) {
+//                        if (debug) {
+//                            System.err.println("collision at $state")
+//                            System.err.println("fuel: ${2 * state.fuel}")
+//                            System.err.println("vSpeedPenalty: ${-max(0.0, abs(state.vSpeed) - safeVerticalSpeed) * 200}")
+//                            System.err.println("hSpeedPenalty: ${-max(0.0, abs(state.hSpeed) - safeHorizontalSpeed) * 200}")
+//                            System.err.println("rotatePenalty: ${-abs(state.command.rotate) * 1000}")
+//                            System.err.println("targetPenalty: ${-state.coordinates.distanceFrom(grid.landingTarget) * 5}")
+//                        }
+//                        100000.0 + 2 * state.fuel -
+//                            max(0.0, abs(state.vSpeed) - safeVerticalSpeed) * 200 -
+//                            max(0.0, abs(state.hSpeed) - safeHorizontalSpeed) * 200 -
+//                            abs(state.command.rotate) * 1000 -
+//                            state.coordinates.distanceFrom(grid.landingTarget) * 5
+//                    } else {
+//                        -min(state.coordinates.distanceFrom(grid.landing.first), state.coordinates.distanceFrom(grid.landing.second))
+//                    }
+//                    return
+//                }
+
+//  score +=
+
+  return score;
+}
+
+Population * initialize_population(Lander lander, Surface * surface) {
+  Population * population = (Population *) malloc(sizeof(Population));
+  population->actions = (Action *) calloc(93, sizeof(Action));
+
+  int next = 0;
+  for (int angle = -15; angle <= 15; angle++) {
+    for (int thrust = -1; thrust <= 1; thrust++) {
+      Action action = (Action) {thrust, angle};
+      action.fitness = evaluate_action(action, lander, surface);
+      population->actions[next] = action;
+      next += 1;
     }
-    new_population.chromosomes[i] = chromosome;
-    current_size += 1;
   }
 
-  return new_population;
+  return population;
+}
+
+Action find_better(Population * population) {
+  Action current = population->actions[0];
+
+  for (int i = 0; i < 93; i++)
+    if (population->actions[i].fitness > current.fitness)
+      current = population->actions[i];
+
+  return current;
 }
 
 int main() {
   srand(time(NULL));
-  Surface *surface = create_surface();
+  Surface * surface = create_surface();
   int surface_n;
   scanf("%d", &surface_n);
 
@@ -238,7 +306,6 @@ int main() {
 
   fprintf(stderr, "Filled surface in %f ms\n", ((double) (end_time - start_time) / CLOCKS_PER_SEC) * 1000.0);
 
-
   // game loop
   while (true) {
     Lander lander = initialize_lander();
@@ -253,40 +320,26 @@ int main() {
         &lander.action.thrust
     );
 
-    double limit = get_millis() + 90; // 90ms
+    double start = get_millis();
+    Population * population = initialize_population(lander, surface);
 
-    Population population;
-    bool population_is_empty = true;
+    Action better = find_better(population);
+//      qsort(population.actions, 93, sizeof(Action), )
 
-    int iterations = 0;
-    while (get_millis() < limit) {
-      population = initialize_population(population, population_is_empty);
-      population_is_empty = false;
-      iterations += 1;
-    }
+    fprintf(stderr, "Selected in %f ms\n", get_millis() - start);
 
-    fprintf(stderr, "Done %d iterations.\n", iterations);
+//    for (int i = 0; i < 93; i++) {
+//      Action action = population->actions[i];
+//      fprintf(stderr, "{%f}", action.fitness);
+//    }
 
-    Coordinate willBeAt = advance(lander);
-
-    int index = willBeAt.y * WIDTH + willBeAt.x;
-
-    fprintf(stderr, "Will be at (%d, %d) [%d]\n", willBeAt.x, willBeAt.y, index);
-
-    if (willBeAt.x >= WIDTH || willBeAt.x < 0 || willBeAt.y >= HEIGHT || willBeAt.y < 0) {
-      fprintf(stderr, "Will be lost!\n");
-    } else if (surface->ground[index]) {
-      fprintf(stderr, "Will crash!\n");
-    }
-
-    Action nextAction = population.chromosomes[0].actions[0];
-
-    nextAction.thrust += lander.action.thrust;
-    nextAction.angle += lander.action.angle;
-    nextAction.thrust = min(4, max(0, nextAction.thrust));
-    nextAction.thrust = min(90, max(-90, nextAction.thrust));
-
-    printf("%d %d\n", nextAction.angle, nextAction.thrust);
+    better.thrust += lander.action.thrust;
+    better.angle += lander.action.angle;
+    better.thrust = min(4, max(0, better.thrust));
+    better.angle = min(90, max(-90, better.angle));
+    free(population->actions);
+    free(population);
+    printf("%d %d\n", better.angle, better.thrust);
   }
 
   return 0;
