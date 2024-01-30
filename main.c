@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <time.h>
+#include <math.h>
 
 const int MAP_SIZE = 21000000;
 const int WIDTH = 7000;
@@ -11,6 +12,19 @@ typedef struct {
   int x;
   int y;
 } Coordinate;
+
+Coordinate zero_coordinate() {
+  return (Coordinate) {0, 0};
+}
+
+typedef struct {
+  int x;
+  int y;
+} Vector2D;
+
+Vector2D zero_vector() {
+  return (Vector2D) {0, 0};
+}
 
 bool is_valid_coordinate(int x, int y) {
   return x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT;
@@ -29,6 +43,35 @@ Surface * create_surface() {
   surface->landing[1].x = 0;
   surface->landing[1].y = 0;
   return surface;
+}
+
+typedef struct {
+  int thrust;
+  int angle;
+} Action;
+
+Action zero_action() {
+  return (Action) {0, 0};
+}
+
+typedef struct {
+  Coordinate coordinate;
+  Vector2D speed;
+  int fuel;
+  Action action;
+} Lander;
+
+Lander initialize_lander() {
+  return (Lander) {zero_coordinate(), zero_vector(), 0, zero_action()};
+}
+
+Coordinate advance(Lander lander) {
+  float xAcc = ((float) lander.action.thrust) * sinf((float) lander.action.angle);
+  float yAcc = ((float) lander.action.thrust) * cosf((float) lander.action.angle) - 3.711f;
+
+  int nextX = (int) roundf((float) lander.coordinate.x + (float) lander.speed.x + (0.5f * xAcc));
+  int nextY = (int) roundf((float) lander.coordinate.y + (float) lander.speed.y + (0.5f * yAcc));
+  return (Coordinate) {nextX, nextY};
 }
 
 void push(int * stack, int * top, int x, int y) {
@@ -55,7 +98,7 @@ void draw_line(Surface * surface, Coordinate from, Coordinate to) {
   float y = (float) from.y;
 
   for (int i = 0; i <= steps; i++) {
-    int index = ((int) y * WIDTH) + (int) x;
+    int index = (int) (roundf(y) * (float) WIDTH + roundf(x));
     surface->ground[index] = true;
     x += xIncrement;
     y += yIncrement;
@@ -120,52 +163,69 @@ void fill_surface(Surface * surface) {
   flood_fill_scanline(surface, (Coordinate) { (surface->landing[0].x + surface->landing[1].x) / 2, surface->landing[1].y - 5});
 }
 
+double get_millis() {
+  return ((double) clock() / (double) CLOCKS_PER_SEC) * 1000.0;
+}
 
 int main() {
-  Surface * surface = create_surface();
-  fprintf(stderr, "Done");
+  Surface *surface = create_surface();
   int surface_n;
   scanf("%d", &surface_n);
 
-  Coordinate coordinates[surface_n];
-
-  for (int i = 0; i < surface_n; i++) {
+  Coordinate coordinates[surface_n + 2];
+  coordinates[0] = zero_coordinate();
+  add_point(surface, coordinates, 0);
+  for (int i = 1; i <= surface_n; i++) {
     int land_x, land_y;
     scanf("%d%d", &land_x, &land_y);
     Coordinate coordinate = (Coordinate) {land_x, land_y};
     coordinates[i] = coordinate;
     add_point(surface, coordinates, i);
   }
+  coordinates[surface_n + 1] = (Coordinate) {6999, 0};
+  add_point(surface, coordinates, surface_n + 1);
+  draw_line(surface, zero_coordinate(), coordinates[surface_n + 1]);
 
   clock_t start_time, end_time;
   start_time = clock();
   fill_surface(surface);
   end_time = clock();
 
-  fprintf(stderr, "Filled surface in %f ms\n", ((double)(end_time - start_time) / CLOCKS_PER_SEC) * 1000.0);
+  fprintf(stderr, "Filled surface in %f ms\n", ((double) (end_time - start_time) / CLOCKS_PER_SEC) * 1000.0);
 
 
   // game loop
   while (1) {
-    int X;
-    int Y;
-    // the horizontal speed (in m/s), can be negative.
-    int h_speed;
-    // the vertical speed (in m/s), can be negative.
-    int v_speed;
-    // the quantity of remaining fuel in liters.
-    int fuel;
-    // the rotation angle in degrees (-90 to 90).
-    int rotate;
-    // the thrust power (0 to 4).
-    int power;
-    scanf("%d%d%d%d%d%d%d", &X, &Y, &h_speed, &v_speed, &fuel, &rotate, &power);
+    Lander lander = initialize_lander();
+    scanf(
+        "%d%d%d%d%d%d%d",
+        &lander.coordinate.x,
+        &lander.coordinate.y,
+        &lander.speed.x,
+        &lander.speed.y,
+        &lander.fuel,
+        &lander.action.angle,
+        &lander.action.thrust
+    );
 
-    // Write an action using printf(). DON'T FORGET THE TRAILING \n
-    // To debug: fprintf(stderr, "Debug messages...\n");
+    double limit = get_millis() + 90; // 90ms
 
+    while (get_millis() < limit) {
+      // Main loop
+    }
 
-    // rotate power. rotate is the desired rotation angle. power is the desired thrust power.
+    Coordinate willBeAt = advance(lander);
+
+    int index = willBeAt.y * WIDTH + willBeAt.x;
+
+    fprintf(stderr, "Will be at (%d, %d) [%d]\n", willBeAt.x, willBeAt.y, index);
+
+    if (willBeAt.x >= WIDTH || willBeAt.x < 0 || willBeAt.y >= HEIGHT || willBeAt.y < 0) {
+      fprintf(stderr, "Will be lost!\n");
+    } else if (surface->ground[index]) {
+      fprintf(stderr, "Will crash!\n");
+    }
+
     printf("-20 3\n");
   }
 
