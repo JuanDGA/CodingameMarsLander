@@ -4,9 +4,28 @@
 #include <time.h>
 #include <math.h>
 
+#define min(a, b) (a > b ? b : a)
+#define max(a, b) (a < b ? b : a)
+
 const int MAP_SIZE = 21000000;
 const int WIDTH = 7000;
 const int HEIGHT = 3000;
+
+const int POPULATION_SIZE = 40;
+const int CHROMOSOME_SIZE = 10;
+const int ELITISM = 4;
+
+double get_rand() {
+  return rand() / (double) RAND_MAX;
+}
+
+int get_random(int min, int max) {
+  return (int) roundf(get_rand() * (max - min + 1)) + min;;
+}
+
+double get_millis() {
+  return ((double) clock() / (double) CLOCKS_PER_SEC) * 1000.0;
+}
 
 typedef struct {
   int x;
@@ -53,6 +72,14 @@ typedef struct {
 Action zero_action() {
   return (Action) {0, 0};
 }
+
+typedef struct {
+  Action actions[10];
+} Chromosome;
+
+typedef struct {
+  Chromosome chromosomes[40];
+} Population;
 
 typedef struct {
   Coordinate coordinate;
@@ -137,7 +164,7 @@ void flood_fill_scanline(Surface * surface, Coordinate from) {
   while (pop(stack, &top, &x, &y)) {
     x1 = x;
     while (x1 >= 0 && is_valid_coordinate(x1, y) && !surface->ground[y * WIDTH + x1]) x1--;
-    x1++;
+    x1 += 1;
     spanAbove = spanBelow = 0;
 
     while (x1 < WIDTH && !surface->ground[y * WIDTH + x1]) {
@@ -152,7 +179,7 @@ void flood_fill_scanline(Surface * surface, Coordinate from) {
         spanBelow = 1;
       }
       else if(spanBelow && y < HEIGHT - 1 && surface->ground[(y + 1) * WIDTH + x1]) spanBelow = 0;
-      x1++;
+      x1 += 1;
     }
   }
 
@@ -163,11 +190,29 @@ void fill_surface(Surface * surface) {
   flood_fill_scanline(surface, (Coordinate) { (surface->landing[0].x + surface->landing[1].x) / 2, surface->landing[1].y - 5});
 }
 
-double get_millis() {
-  return ((double) clock() / (double) CLOCKS_PER_SEC) * 1000.0;
+Population initialize_population(Population population, bool is_empty) {
+  Population new_population;
+
+  int current_size = 0;
+  if (!is_empty) {
+    new_population = population;
+    current_size = ELITISM;
+  }
+
+  for (int i = current_size; i < POPULATION_SIZE; i++) {
+    Chromosome chromosome = new_population.chromosomes[i];
+    for (int j = 0; j < CHROMOSOME_SIZE; j++) {
+      chromosome.actions[j] = (Action) { get_random(-1, 1), get_random(-15, 15) };
+    }
+    new_population.chromosomes[i] = chromosome;
+    current_size += 1;
+  }
+
+  return new_population;
 }
 
 int main() {
+  srand(time(NULL));
   Surface *surface = create_surface();
   int surface_n;
   scanf("%d", &surface_n);
@@ -195,7 +240,7 @@ int main() {
 
 
   // game loop
-  while (1) {
+  while (true) {
     Lander lander = initialize_lander();
     scanf(
         "%d%d%d%d%d%d%d",
@@ -210,9 +255,17 @@ int main() {
 
     double limit = get_millis() + 90; // 90ms
 
+    Population population;
+    bool population_is_empty = true;
+
+    int iterations = 0;
     while (get_millis() < limit) {
-      // Main loop
+      population = initialize_population(population, population_is_empty);
+      population_is_empty = false;
+      iterations += 1;
     }
+
+    fprintf(stderr, "Done %d iterations.\n", iterations);
 
     Coordinate willBeAt = advance(lander);
 
@@ -226,7 +279,14 @@ int main() {
       fprintf(stderr, "Will crash!\n");
     }
 
-    printf("-20 3\n");
+    Action nextAction = population.chromosomes[0].actions[0];
+
+    nextAction.thrust += lander.action.thrust;
+    nextAction.angle += lander.action.angle;
+    nextAction.thrust = min(4, max(0, nextAction.thrust));
+    nextAction.thrust = min(90, max(-90, nextAction.thrust));
+
+    printf("%d %d\n", nextAction.angle, nextAction.thrust);
   }
 
   return 0;
