@@ -26,6 +26,14 @@ int get_random(int min, int max) {
   return (int) roundf(get_rand() * (max - min + 1)) + min;;
 }
 
+int trim(int value) {
+  return value < 2 ? 0 : get_random(1, value);
+}
+
+bool random_bool() {
+  return get_rand() > 0.5;
+}
+
 double get_millis() {
   return ((double) clock() / (double) CLOCKS_PER_SEC) * 1000.0;
 }
@@ -271,11 +279,33 @@ double evaluate_sequence(ActionSequence sequence, Lander lander, Surface * surfa
     }
     action_duration += 1;
   }
-  return -1.0;
 }
 
-ActionSequence cross_over(ActionSequence a, ActionSequence b) {
-  return a;
+void cross_over(ActionSequence a, ActionSequence b, ActionSequence * save_in) {
+  ActionSequence start;
+  ActionSequence end;
+
+  if (random_bool()) {
+    start = b;
+    end = a;
+  } else {
+    start = a;
+    end = b;
+  }
+
+  int end_start = trim(end.size);
+  int start_end = trim(min(start.size, end_start + CHROMOSOME_SIZE - start.size - 1));
+
+  int result_size = start_end + (end.size - end_start);
+  save_in->size = result_size;
+
+  for (int i = 0; i < start_end; i++) {
+    save_in->actions[i] = start.actions[i];
+  }
+
+  for (int i = 0; i < (end.size - end_start); i++) {
+    save_in->actions[start_end + i] = end.actions[end_start + i];
+  }
 }
 
 ActionSequence mutate_sequence(ActionSequence target) {
@@ -391,17 +421,15 @@ int main() {
       }
       for (int i = 0; i < ELITISM; i++) {
         int change_at = ELITISM + i;
-        ActionSequence result = cross_over(population->sequences[get_random(0, ELITISM)], population->sequences[get_random(0, ELITISM)]);
-        population->sequences[change_at] = result;
+        cross_over(population->sequences[get_random(0, ELITISM)], population->sequences[get_random(0, ELITISM)], &population->sequences[change_at]);
       }
-//      qsort(population->sequences, POPULATION_SIZE, sizeof(ActionSequence), compare_sequences);
       population->size -= 10; // We will "remove" the last 10 elements, in order to add 10 random actions in the next iteration.
       for (int i = 0; i < population->size; i++) {
         population->sequences[i] = mutate_sequence(population->sequences[i]);
       }
     }
 
-    fprintf(stderr, "Done %d iterations\n", iterations);
+    fprintf(stderr, "Done %d iterations. The best has %f\n", iterations, population->sequences[0].fitness);
 
     Action better = population->sequences[0].actions[0];
 
