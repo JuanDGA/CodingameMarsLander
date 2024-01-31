@@ -308,8 +308,9 @@ void cross_over(ActionSequence a, ActionSequence b, ActionSequence * save_in) {
   }
 }
 
-ActionSequence mutate_sequence(ActionSequence target) {
-  return target;
+void mutate_sequence(ActionSequence * target) {
+  int mutate_at = get_random(1, target->size) - 1;
+  target->actions[mutate_at] = target->actions[mutate_at];
 }
 
 Population * initialize_population() {
@@ -425,7 +426,7 @@ int main() {
       }
       population->size -= 10; // We will "remove" the last 10 elements, in order to add 10 random actions in the next iteration.
       for (int i = 0; i < population->size; i++) {
-        population->sequences[i] = mutate_sequence(population->sequences[i]);
+        mutate_sequence(&population->sequences[i]);
       }
     }
 
