@@ -14,8 +14,8 @@ const int WIDTH = 7000;
 const int HEIGHT = 3000;
 
 const int POPULATION_SIZE = 40;
-const int CHROMOSOME_SIZE = 10;
-const int ACTION_DURATION = 40;
+const int CHROMOSOME_SIZE = 20;
+const int ACTION_DURATION = 20;
 const int ELITISM = 15;
 
 double get_rand() {
@@ -83,6 +83,10 @@ Surface * create_surface() {
   return surface;
 }
 
+Coordinate get_landing_coordinate(Surface * surface) {
+  return (Coordinate) {(surface->landing[0].x + surface->landing[1].x) / 2, surface->landing[1].y};
+}
+
 typedef struct {
   int thrust;
   int angle;
@@ -114,6 +118,14 @@ Action create_random_action() {
   return (Action) {thrust, rotation, duration};
 }
 
+Action mutated_action(Action seed) {
+  if (random_bool()) return seed;
+  int new_thrust = coerce_in(0, 4, seed.thrust + get_random(-1, 1));
+  int new_angle = coerce_in(-90, 90, seed.angle + get_random(-15, 15));
+  int new_duration = coerce_in(1, ACTION_DURATION, seed.duration + get_random(-3, 3));
+  return (Action) {new_thrust, new_angle, new_duration};
+}
+
 typedef struct {
   ActionSequence * sequences;
   int size;
@@ -137,14 +149,14 @@ Lander advance(Lander lander, Action action) {
   next_action.thrust = coerce_in(0, 4, next_action.thrust);
   next_action.angle = coerce_in(-90, 90, next_action.angle);
 
-  float xAcc = ((float) next_action.thrust) * sinf(degToRad((float) next_action.angle));
+  float xAcc = -((float) next_action.thrust) * sinf(degToRad((float) next_action.angle));
   float yAcc = (((float) next_action.thrust) * cosf(degToRad((float) next_action.angle))) - 3.711f;
 
-  int nextX = (int) roundf((float) lander.coordinate.x + (float) lander.speed.x - (0.5f * xAcc));
+  int nextX = (int) roundf((float) lander.coordinate.x + (float) lander.speed.x + (0.5f * xAcc));
   int nextY = (int) roundf((float) lander.coordinate.y + (float) lander.speed.y + (0.5f * yAcc));
 
   Coordinate next_coordinate = (Coordinate) {nextX, nextY};
-  Vector2D next_speed = (Vector2D) {lander.speed.x - (int) roundf(xAcc), lander.speed.y + (int) roundf(yAcc)};
+  Vector2D next_speed = (Vector2D) {lander.speed.x + (int) roundf(xAcc), lander.speed.y + (int) roundf(yAcc)};
 
   Lander result = (Lander) {
     next_coordinate,
@@ -242,7 +254,9 @@ void flood_fill_scanline(Surface * surface, Coordinate from) {
 }
 
 void fill_surface(Surface * surface) {
-  flood_fill_scanline(surface, (Coordinate) { (surface->landing[0].x + surface->landing[1].x) / 2, surface->landing[1].y - 5});
+  Coordinate landing = get_landing_coordinate(surface);
+  landing.y -= 1;
+  flood_fill_scanline(surface, landing);
 }
 
 bool is_crash(Coordinate coordinate, Surface * surface) {
@@ -259,10 +273,17 @@ bool is_game_over(Coordinate coordinate, Surface * surface) {
 }
 
 bool check_landing_zone(Coordinate coordinate, Surface * surface) {
-  int min_x = min(surface->landing[0].x, surface->landing[1].x) + 200;
-  int max_x = max(surface->landing[0].x, surface->landing[1].x) - 200;
+  int min_x = min(surface->landing[0].x, surface->landing[1].x) + 250;
+  int max_x = max(surface->landing[0].x, surface->landing[1].x) - 250;
 
   return abs(coordinate.y - surface->landing[0].y) <= 200 && coordinate.x >= min_x && coordinate.x <= max_x;
+}
+
+bool is_landing(Lander lander, Surface * surface) {
+  return check_landing_zone(lander.coordinate, surface) &&
+    abs(lander.speed.y) <= 40 &&
+    abs(lander.speed.x) <= 20 &&
+    abs(lander.action.angle) == 0;
 }
 
 double evaluate_sequence(ActionSequence * sequence, Lander lander, Surface * surface) {
@@ -270,49 +291,67 @@ double evaluate_sequence(ActionSequence * sequence, Lander lander, Surface * sur
   int current_action = 0;
   int action_duration = 0;
 
-  while (true) {
+  double score = 10000.0;
+
+  while (!is_game_over(evaluated_lander.coordinate, surface)) {
     if (action_duration == sequence->actions[current_action].duration) {
       current_action += 1;
       action_duration = 0;
     }
     evaluated_lander = advance(evaluated_lander, sequence->actions[current_action]);
 
-    if (is_game_over(evaluated_lander.coordinate, surface)) {
-      if (!check_landing_zone(evaluated_lander.coordinate, surface))
-        return -1;
-      return 100000.0 + 2 * evaluated_lander.fuel -
-        max(0, abs(evaluated_lander.speed.y) - 35) * 200 -
-        max(0, abs(evaluated_lander.speed.x) - 15) * 400 -
-        abs(evaluated_lander.action.angle) * 1000;
-//        max(distance(evaluated_lander.coordinate, surface->landing[0]), distance(evaluated_lander.coordinate, surface->landing[1])) * 2;
+    if (is_landing(evaluated_lander, surface)) {
+      return 10000000.0 + 2 * evaluated_lander.fuel;
+    } else if (check_landing_zone(evaluated_lander.coordinate, surface)) {
+      score += 100000.0 -
+        max(0, abs(evaluated_lander.speed.y) - 35) * 1000 -
+        max(0, abs(evaluated_lander.speed.x) - 15) * 1000 -
+        abs(evaluated_lander.action.angle) * 1500;
     }
     action_duration += 1;
   }
+  if (is_landing(evaluated_lander, surface)) return 10000000.0 + evaluated_lander.fuel;
+
+  if (!check_landing_zone(evaluated_lander.coordinate, surface))
+    return -distance(evaluated_lander.coordinate, get_landing_coordinate(surface));
+
+  return 100000.0 + 2 * evaluated_lander.fuel -
+    max(0, abs(evaluated_lander.speed.y) - 35) * 400 -
+    max(0, abs(evaluated_lander.speed.x) - 15) * 800 -
+    abs(evaluated_lander.action.angle) * 1500 -
+    distance(evaluated_lander.coordinate, get_landing_coordinate(surface)) * 5;
 }
 
-void cross_over(ActionSequence * a, ActionSequence * b, ActionSequence * save_in) {
-  ActionSequence * start;
-  ActionSequence * end;
+void cross_over(ActionSequence a, ActionSequence b, ActionSequence * save_in) {
+  ActionSequence * result = (ActionSequence *) malloc(sizeof(ActionSequence));
+  result->actions = (Action *) calloc(CHROMOSOME_SIZE, sizeof(Action));
+  result->fitness = -1.0;
+  result->size = 0;
 
-  if (random_bool()) {
-    start = b;
-    end = a;
-  } else {
-    start = a;
-    end = b;
+  int max_idx = min(a.size, b.size);
+
+  int result_size = 0;
+
+  for (int i = 0; i < max_idx; i++) {
+    double weight = get_rand();
+    int new_thrust =
+      coerce_in(0, 4, (int) round(weight * (double) a.actions[i].thrust + (1.0 - weight) * (double) b.actions[i].thrust));
+    int new_angle =
+      coerce_in(-90, 90, (int) round(weight * (double) a.actions[i].angle + (1.0 - weight) * (double) b.actions[i].angle));
+    int new_duration =
+      coerce_in(-90, 90, (int) round(weight * (double) a.actions[i].duration + (1.0 - weight) * (double) b.actions[i].duration));
+
+    result->actions[i] = (Action) {new_thrust, new_angle, new_duration};
+    result_size += 1;
   }
 
-  int start_of_second_half = trim(end->size);
-  int end_of_first_half = trim(min(start->size, start_of_second_half + CHROMOSOME_SIZE - start->size + 1));
-  save_in->size = 0;
-
-  for (int i = 0; i < end_of_first_half; i++) {
-    save_in->actions[save_in->size++] = start->actions[i];
+  for (int i = result_size; i < b.size; i++) {
+    result->actions[i] = mutated_action(b.actions[i]);
+    result_size += 1;
   }
 
-  for (int i = 0; i < (end->size - start_of_second_half); i++) {
-    save_in->actions[save_in->size++] = end->actions[start_of_second_half + i];
-  }
+  result->size = result_size;
+  *save_in = *result;
 }
 
 void mutate_sequence(ActionSequence * target) {
@@ -354,8 +393,14 @@ void to_random_sequence(ActionSequence * action_sequence) {
   }
 }
 
+void to_from_action_sequence(ActionSequence * action_sequence, Action action) {
+  action_sequence->size = 1;
+  action_sequence->fitness = -1.0;
+  action_sequence->actions[0] = action;
+}
+
 Action move_to_target(Lander lander, Surface * surface) {
-  int target_x = (surface->landing[0].x + surface->landing[0].x) / 2;
+  int target_x = get_landing_coordinate(surface).x;
 
   bool is_left = lander.coordinate.x > target_x;
 
@@ -364,6 +409,7 @@ Action move_to_target(Lander lander, Surface * surface) {
 }
 
 int main() {
+  srand(time(NULL));
   Surface * surface = create_surface();
   int surface_n;
   scanf("%d", &surface_n);
@@ -389,11 +435,6 @@ int main() {
 
   fprintf(stderr, "Filled surface in %f ms\n", ((double) (end_time - start_time) / CLOCKS_PER_SEC) * 1000.0);
 
-  for (int i = 0; i < 2000; i++) {
-    int n = get_random(-1, 1);
-    if (n < -1 || n > 1) fprintf(stderr, "Hahfagf\n");
-  }
-
   // game loop
   while (true) {
     Lander lander = initialize_lander();
@@ -407,18 +448,19 @@ int main() {
         &lander.action.angle,
         &lander.action.thrust
     );
+    double limit = get_millis() + 95;
 
-    double limit = get_millis() + 90;
-    Population * population = initialize_population();
-    for (int i = 0; i < ELITISM; i++) {
-       population->sequences[i].actions[0] = lander.action;
-       population->sequences[i].size = 1;
-       population->size += 1;
-    }
     ActionSequence best;
     best.actions = (Action *) calloc(CHROMOSOME_SIZE, sizeof(Action));
     best.fitness = -INFINITY;
     best.size = 0;
+
+    Population * population = initialize_population();
+
+    for (int i = 0; i < ELITISM; i++) {
+      to_from_action_sequence(&population->sequences[i], lander.action);
+      population->size += 1;
+    }
 
     int iterations = 0;
     while (get_millis() < limit) {
@@ -439,7 +481,7 @@ int main() {
         int change_at = ELITISM + i;
         int rand_1 = get_random(0, ELITISM-1);
         int rand_2 = get_random(0, ELITISM-1);
-        cross_over(&population->sequences[rand_1], &population->sequences[rand_2], &population->sequences[change_at]);
+        cross_over(population->sequences[rand_1], population->sequences[rand_2], &population->sequences[change_at]);
       }
       population->size -= 10; // We will "remove" the last 10 elements, in order to add 10 random actions in the next iteration.
       for (int i = 0; i < population->size; i++) {
